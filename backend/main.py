@@ -4,7 +4,10 @@ Select workflow via query param: ws://host/ws?mode=w1~w4
 """
 
 import json
+import logging
 import traceback
+
+logging.basicConfig(level=logging.INFO)
 from pathlib import Path
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query
 from fastapi.staticfiles import StaticFiles

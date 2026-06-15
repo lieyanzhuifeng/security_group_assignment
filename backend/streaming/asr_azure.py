@@ -62,6 +62,8 @@ class StreamingASR:
             done, pending = await asyncio.wait(
                 [get_task, done_task], return_when=asyncio.FIRST_COMPLETED
             )
+            for task in pending:
+                task.cancel()
             if done_task in done:
                 if not result_queue.empty():
                     yield result_queue.get_nowait()
@@ -83,14 +85,18 @@ class StreamingASR:
         fut = asyncio.get_event_loop().create_future()
 
         def _on_result(evt):
-            if evt.result.reason == speechsdk.ResultReason.RecognizedSpeech:
-                fut.set_result(evt.result.text)
-            elif evt.result.reason == speechsdk.ResultReason.NoMatch:
-                fut.set_result("")
-            else:
+            if not fut.done():
+                if evt.result.reason == speechsdk.ResultReason.RecognizedSpeech:
+                    fut.set_result(evt.result.text)
+                else:
+                    fut.set_result("")
+
+        def _on_cancel(evt):
+            if not fut.done():
                 fut.set_result("")
 
         recognizer.recognized.connect(_on_result)
+        recognizer.canceled.connect(_on_cancel)
         recognizer.recognize_once()
         return await fut
 
