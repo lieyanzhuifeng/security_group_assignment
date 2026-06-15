@@ -28,10 +28,15 @@ class StreamingTTS:
         ssml = self._build_ssml(text)
 
         def _synth():
-            synthesizer = speechsdk.SpeechSynthesizer(speech_config=self._config)
+            pull_stream = speechsdk.audio.PullAudioOutputStream()
+            audio_config = speechsdk.audio.AudioOutputConfig(stream=pull_stream)
+            synthesizer = speechsdk.SpeechSynthesizer(
+                speech_config=self._config, audio_config=audio_config
+            )
             result = synthesizer.speak_ssml(ssml)
             if result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
-                return result.audio_data
+                data = result.audio_data or pull_stream.read(pull_stream.size())
+                return data
             logger.error(
                 f"TTS synthesis failed: reason={result.reason} "
                 f"details={result.error_details}"

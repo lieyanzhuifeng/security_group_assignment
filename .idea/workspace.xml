@@ -6,11 +6,8 @@
   <component name="ChangeListManager">
     <list default="true" id="24c99518-7c31-4fc3-8b25-6d95b1e9efad" name="更改" comment="">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/安全期末作业.iml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/安全期末作业.iml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/backend/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/main.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/backend/streaming/asr_azure.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/streaming/asr_azure.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/backend/streaming/tts_azure.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/streaming/tts_azure.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/backend/test_manifest.json" beforeDir="false" afterPath="$PROJECT_DIR$/backend/test_manifest.json" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/index.html" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/index.html" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -34,6 +31,7 @@
     "Python.asr_azure.executor": "Run",
     "Python.experiment.executor": "Run",
     "Python.main.executor": "Run",
+    "Python.tts_azure.executor": "Run",
     "Python.w3_full_stream.executor": "Run",
     "RunOnceActivity.ShowReadmeOnStart": "true",
     "RunOnceActivity.git.unshallow": "true",
