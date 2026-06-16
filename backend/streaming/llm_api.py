@@ -3,7 +3,24 @@ Streaming LLM using DeepSeek API (OpenAI-compatible).
 """
 
 import json
+import re
+import logging
 import httpx
+
+logger = logging.getLogger(__name__)
+
+_MD_PATTERNS = [
+    (re.compile(r'^#{1,6}\s+', re.MULTILINE), ''),
+    (re.compile(r'\*\*(.+?)\*\*'), r'\1'),
+    (re.compile(r'~~(.+?)~~'), r'\1'),
+    (re.compile(r'`(.+?)`'), r'\1'),
+]
+
+
+def _strip_markdown(text: str) -> str:
+    for pattern, repl in _MD_PATTERNS:
+        text = pattern.sub(repl, text)
+    return text
 
 
 class StreamingLLM:
@@ -51,11 +68,13 @@ class StreamingLLM:
                         token = delta.get("content", "")
                         if token:
                             buffer += token
+                            logger.debug(f"[LLM] token: {token!r}")
                             yield ("token", token)
                     except (json.JSONDecodeError, KeyError):
                         continue
 
                 if buffer.strip():
+                    logger.info(f"[LLM] stream done, buffer={buffer!r}")
                     yield ("final", buffer.strip())
 
     async def generate_once(self, prompt: str) -> str:
@@ -79,4 +98,4 @@ class StreamingLLM:
             resp = await client.post(f"{self.base_url}/v1/chat/completions",
                                      headers=headers, json=payload)
             data = resp.json()
-            return data["choices"][0]["message"]["content"].strip()
+            return _strip_markdown(data["choices"][0]["message"]["content"].strip())

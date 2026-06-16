@@ -40,10 +40,8 @@ header h1{font-size:16px;color:#1a1a1a;font-weight:600}
   <header><h1>船舶建造智能问答系统 · 流式管线</h1></header>
   <div id="toolbar">
     <select id="workflowSelect">
-      <option value="w1">W1 基线 · 非流式</option>
-      <option value="w2">W2 流式ASR</option>
-      <option value="w3">W3 全流式</option>
-      <option value="w4">W4 全量优化</option>
+      <option value="w1">W1 基线 · 先文字后语音</option>
+      <option value="w2">W2 全流式</option>
     </select>
     <span class="tag" id="modeTag">非流式</span>
   </div>
@@ -60,8 +58,8 @@ const chat=document.getElementById("chat"),recordBtn=document.getElementById("re
       statusEl=document.getElementById("status"),wsSel=document.getElementById("workflowSelect"),
       modeTag=document.getElementById("modeTag");
 let ws=null,audioCtx=null,source=null,processor=null,stream=null;
-let isRecording=false,wsMode="w1";
-const descs={w1:"非流式",w2:"流式ASR",w3:"全流式",w4:"全量优化"};
+let isRecording=false,wsMode="w1",audioQueue=[],audioPlaying=false;
+const descs={w1:"先文字后语音",w2:"全流式"};
 
 function connect(m){
   if(ws)ws.close();
@@ -80,20 +78,26 @@ function onMsg(e){
   else if(d.type==="asr_final"){clearTmp();addMsg("🎤 "+d.text,"asr-final")}
   else if(d.type==="llm_token"){
     let el=chat.querySelector(".llm-token:last-child");
-    if(!el||el.dataset.sealed){el=document.createElement("div");el.className="msg llm-token";el.dataset.sealed="";chat.appendChild(el)}
-    el.textContent+="🤖 "+d.text;chat.scrollTop=chat.scrollHeight
+    if(!el||el.dataset.sealed){el=document.createElement("div");el.className="msg llm-token";el.dataset.sealed="";el.textContent="🤖 ";chat.appendChild(el)}
+    el.textContent+=d.text;chat.scrollTop=chat.scrollHeight
   }else if(d.type==="answer"){clearTmp();addMsg("🤖 "+d.text,d.safe===false?"security":"bot")}
-  else if(d.type==="tts_chunk"){clearTmp();addMsg("🤖 "+d.text,"bot");playAudio(d.data)}
+  else if(d.type==="tts_chunk"){playAudio(d.data)}
   else if(d.type==="audio"){playAudio(d.data);setStatus("就绪","idle")}
   else if(d.type==="done"){setStatus("就绪","idle")}
 }
 
 function playAudio(b64){
-  const bin=Uint8Array.from(atob(b64),c=>c.charCodeAt(0));
+  audioQueue.push(b64);
+  if(!audioPlaying)_playNext();
+}
+function _playNext(){
+  if(!audioQueue.length){audioPlaying=false;return}
+  audioPlaying=true;
+  const bin=Uint8Array.from(atob(audioQueue.shift()),c=>c.charCodeAt(0));
   const blob=new Blob([bin],{type:"audio/wav"}),url=URL.createObjectURL(blob);
   const a=new Audio(url);
-  a.onended=()=>URL.revokeObjectURL(url);
-  a.play().catch(()=>{});
+  a.onended=()=>{URL.revokeObjectURL(url);_playNext()};
+  a.play().catch(()=>_playNext());
 }
 
 function setStatus(t,s){statusEl.innerHTML=`<span class="dot ${s}"></span>${t}`}
@@ -140,6 +144,7 @@ function stopRec(){
   if(audioCtx){audioCtx.close();audioCtx=null}
   if(stream){stream.getTracks().forEach(t=>t.stop());stream=null}
   recordBtn.classList.remove("recording");recordBtn.textContent="🎤";
+  audioQueue=[];audioPlaying=false;
   if(ws&&ws.readyState===WebSocket.OPEN)ws.send(JSON.stringify({type:"audio_end"}));
   setStatus("处理中…","processing");
 }

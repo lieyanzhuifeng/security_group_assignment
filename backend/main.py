@@ -6,6 +6,7 @@ Select workflow via query param: ws://host/ws?mode=w1~w4
 import json
 import logging
 import traceback
+import base64
 
 logging.basicConfig(level=logging.INFO)
 from pathlib import Path
@@ -42,34 +43,36 @@ async def websocket_endpoint(ws: WebSocket, mode: str = Query("w1")):
         return
 
     try:
-        # --- Streaming mode (W2-W4) ---
-        if mode in ("w2", "w3", "w4"):
-            await pipeline.run_stream(_iter_audio_chunks(ws), ws)
-        # --- Non-streaming mode (W1) ---
+        if mode == "w2":
+            while True:
+                await pipeline.run_stream(_iter_audio_chunks(ws), ws)
         else:
-            audio_chunks = []
-            async for chunk, is_last in _iter_audio_chunks(ws):
-                if is_last:
-                    break
-                audio_chunks.append(chunk)
-            audio_bytes = b"".join(audio_chunks)
-            result = await pipeline.run(audio_bytes)
-            if result.error:
-                await ws.send_json({"error": result.error})
-                return
-            await ws.send_json({"type": "asr_final", "text": result.asr_text})
-            await ws.send_json({"type": "answer", "text": result.answer_text})
-            import base64
-            audio_b64 = base64.b64encode(result.tts_audio).decode()
-            await ws.send_json({
-                "type": "audio", "data": audio_b64,
-                "timings": {"asr": round(result.timings.asr, 2),
-                            "llm": round(result.timings.llm, 2),
-                            "tts": round(result.timings.tts, 2),
-                            "total": round(result.timings.total, 2)},
-            })
+            # W1: loop for multiple utterances, send text before TTS
+            while True:
+                audio_chunks = []
+                async for chunk, is_last in _iter_audio_chunks(ws):
+                    audio_chunks.append(chunk)
+                    if is_last:
+                        break
+                audio_bytes = b"".join(audio_chunks)
+                if not audio_bytes:
+                    continue
+                result = await pipeline.run(audio_bytes)
+                if result.error:
+                    await ws.send_json({"error": result.error})
+                    continue
+                await ws.send_json({"type": "asr_final", "text": result.asr_text})
+                await ws.send_json({"type": "answer", "text": result.answer_text})
+                audio_b64 = base64.b64encode(result.tts_audio).decode()
+                await ws.send_json({
+                    "type": "audio", "data": audio_b64,
+                    "timings": {"asr": round(result.timings.asr, 2),
+                                "llm": round(result.timings.llm, 2),
+                                "tts": round(result.timings.tts, 2),
+                                "total": round(result.timings.total, 2)},
+                })
 
-    except WebSocketDisconnect:
+    except (WebSocketDisconnect, RuntimeError):
         pass
     except Exception as e:
         traceback.print_exc()
