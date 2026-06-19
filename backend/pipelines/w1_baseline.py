@@ -28,39 +28,20 @@ class W1Baseline(BasePipeline):
         self.tts = tts
 
     async def run(self, audio_bytes: bytes) -> PipelineResult:
-        t = TimingMetrics()
-        t_start = time.perf_counter()
+        async def _chunks():
+            yield (audio_bytes, False)
+            yield (b"", True)
 
-        t0 = time.perf_counter()
-        asr_text = await self.asr.transcribe_once(audio_bytes)
-        t.asr = time.perf_counter() - t0
-        if not asr_text.strip():
-            return PipelineResult(error="未识别到语音", asr_text=asr_text, timings=t)
+        class _Null:
+            async def send_json(self, data):
+                pass
 
-        t0 = time.perf_counter()
-        answer_text = await self.llm.generate_once(asr_text)
-        t.llm = time.perf_counter() - t0
-
-        t0 = time.perf_counter()
-        tts_audio = await self.tts.synthesize_once(answer_text)
-        t.tts = time.perf_counter() - t0
-
-        t.total = time.perf_counter() - t_start
-        t.first_audio = t.total
-
-        logger.info(f"[W1] asr={t.asr:.2f}s  llm={t.llm:.2f}s  tts={t.tts:.2f}s  "
-                    f"total={t.total:.2f}s  first_audio={t.first_audio:.2f}s")
-
-        return PipelineResult(
-            asr_text=asr_text, answer_text=answer_text,
-            tts_audio=tts_audio, timings=t,
-        )
+        return await self.run_stream(_chunks(), _Null())
 
     async def run_stream(self, audio_chunk_iter, ws):
         """Accumulate audio, one-shot ASR, LLM, send text, then TTS."""
         t = TimingMetrics()
         t_start = time.perf_counter()
-        asr_text = ""
 
         chunks = []
         async for chunk, is_last in audio_chunk_iter:
@@ -91,5 +72,10 @@ class W1Baseline(BasePipeline):
                                         "total": round(time.perf_counter() - t_start, 2)}})
 
         t.total = time.perf_counter() - t_start
+        t.first_audio = t.total
+
+        logger.info(f"[W1] asr={t.asr:.2f}s  llm={t.llm:.2f}s  tts={t.tts:.2f}s  "
+                    f"total={t.total:.2f}s  first_audio={t.first_audio:.2f}s")
+
         return PipelineResult(asr_text=asr_text, answer_text=answer_text,
                               tts_audio=tts_audio, timings=t)

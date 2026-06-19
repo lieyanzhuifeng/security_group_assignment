@@ -1,10 +1,9 @@
 """
-W2 — 全流式
+W3 — 安全全流式
 
-- 并行预热: ASR 进行时预建 LLM HTTP 连接
-- ASR: 流式 (partial 实时推送)
-- LLM: 流式 (逐 token 推送)
-- TTS: 句级切分 → 逐句合成 → 实时推送
+- 基于 W2 全流式管线
+- 新增 LLM 安全门控: ASR 完成后先用小开销 LLM 分类，不安全直接短路
+- 安全/无关话题：播放固定安全提示，不调用主 LLM
 """
 
 import time
@@ -20,17 +19,20 @@ from sentence_splitter import SentenceSplitter
 
 logger = logging.getLogger(__name__)
 
+SAFETY_RESPONSES = {
+    "sensitive": "检测到不安全输入，已拒绝回答。请遵守船舶建造安全规范。",
+    "out_of_domain": "抱歉，我只能回答船舶建造相关的问题。请咨询焊接、涂装、船体、主机等技术话题。",
+}
 
-class W2FullStreaming(BasePipeline):
-    name = "w2"
-    description = "全流式 — 并行预热 + 流式ASR → 流式LLM → 句级切分 → 流式TTS"
+
+class W3SecureStreaming(BasePipeline):
+    name = "w3"
+    description = "安全流式 — W2全流式 + LLM安全门控（敏感/无关话题短路）"
 
     def __init__(self, asr: StreamingASR, llm: StreamingLLM, tts: StreamingTTS):
         self.asr = asr
         self.llm = llm
         self.tts = tts
-
-    # ── experiment 用 (非流式汇总) ──────────────────────────
 
     async def run(self, audio_bytes: bytes) -> PipelineResult:
         async def _chunks():
@@ -43,21 +45,18 @@ class W2FullStreaming(BasePipeline):
 
         return await self.run_stream(_chunks(), _Null())
 
-    # ── WebSocket 实时流式 ──────────────────────────────────
-
     async def run_stream(self, audio_chunk_iter, ws):
         t = TimingMetrics()
         t_start = time.perf_counter()
         asr_text = ""
 
-        # 并行预热：ASR 进行时预连 LLM API
         warmup_task = asyncio.create_task(self._warmup_llm())
 
         async def _audio_gen():
             async for chunk, is_last in audio_chunk_iter:
                 yield chunk
 
-        # 流式 ASR ────────────────────────────────────────
+        # ── 流式 ASR ────────────────────────────────────
         async for etype, text in self.asr.transcribe_stream(_audio_gen()):
             if etype == "partial":
                 await ws.send_json({"type": "asr_partial", "text": text})
@@ -70,7 +69,13 @@ class W2FullStreaming(BasePipeline):
             await ws.send_json({"error": "未识别到语音"})
             return PipelineResult(error="未识别到语音", timings=t)
 
-        await warmup_task  # 确保预热完成
+        await warmup_task
+
+        # ── 安全门控 ───────────────────────────────────
+        safety = await self.llm.classify_safety(asr_text)
+        is_safe = safety.get("safe", True)
+        logger.info(f"[W3] safety check: safe={is_safe} reason={safety.get('reason')} "
+                    f"input={asr_text!r}")
 
         sentence_queue = asyncio.Queue()
         first_audio_recorded = False
@@ -97,20 +102,34 @@ class W2FullStreaming(BasePipeline):
                     audio_b64 = base64.b64encode(audio_chunk).decode()
                     await ws.send_json({"type": "tts_chunk", "data": audio_b64, "text": sent})
                 except Exception as e:
-                    logger.error(f"[W2] TTS error for sentence {sent!r}: {e!r}")
+                    logger.error(f"[W3] TTS error for sentence {sent!r}: {e!r}")
                 sentence_queue.task_done()
 
         tts_worker_task = asyncio.create_task(_tts_worker())
 
         await sentence_queue.put("好的，正在为您查询。")
 
-        # 流式 LLM → 句级切分 → 流式 TTS ─────────────────
+        if not is_safe:
+            reason = safety.get("reason", "out_of_domain")
+            response = SAFETY_RESPONSES.get(reason, SAFETY_RESPONSES["out_of_domain"])
+            logger.info(f"[W3] blocked: reason={reason}")
+            await ws.send_json({"type": "answer", "text": response, "safe": False})
+            await sentence_queue.put(response)
+            await sentence_queue.put(None)
+            await tts_worker_task
+
+            t.total = time.perf_counter() - t_start
+            logger.info(f"[W3-block] total={t.total:.2f}s  first_audio={t.first_audio or 0:.2f}s")
+            await ws.send_json({"type": "done"})
+            return PipelineResult(asr_text=asr_text, answer_text=response, timings=t)
+
+        # ── 流式 LLM → 句级切分 → 流式 TTS ──────────────
         splitter = SentenceSplitter()
         full_answer = ""
         t_llm_start = time.perf_counter()
         first_token = True
 
-        logger.info(f"[W2] LLM start, prompt={asr_text!r}")
+        logger.info(f"[W3] LLM start, prompt={asr_text!r}")
         token_count = 0
         sentence_count = 0
 
@@ -121,20 +140,19 @@ class W2FullStreaming(BasePipeline):
                     first_token = False
                 full_answer += text
                 token_count += 1
-                logger.debug(f"[W2] token#{token_count}: {text!r}")
+                logger.debug(f"[W3] token#{token_count}: {text!r}")
                 await ws.send_json({"type": "llm_token", "text": text})
 
                 sentences = splitter.feed(text)
                 if sentences:
-                    logger.debug(f"[W2] sentences: {sentences}")
+                    logger.debug(f"[W3] sentences: {sentences}")
                 for sent in sentences:
                     sentence_count += 1
-                    logger.debug(f"[W2] tts_chunk#{sentence_count}: {sent!r}")
+                    logger.debug(f"[W3] tts_chunk#{sentence_count}: {sent!r}")
                     await sentence_queue.put(sent)
 
-        logger.info(f"[W2] LLM done: {token_count} tokens, {sentence_count} sentences, full={full_answer!r}")
+        logger.info(f"[W3] LLM done: {token_count} tokens, {sentence_count} sentences, full={full_answer!r}")
 
-        # 兜底发送剩余文本
         for sent in splitter.flush():
             sentence_count += 1
             await sentence_queue.put(sent)
@@ -145,7 +163,7 @@ class W2FullStreaming(BasePipeline):
         t.llm = time.perf_counter() - t_llm_start
         t.total = time.perf_counter() - t_start
 
-        logger.info(f"[W2-stream] asr={t.asr:.2f}s  llm_ttfb={t.llm_ttfb:.2f}s  "
+        logger.info(f"[W3] asr={t.asr:.2f}s  llm_ttfb={t.llm_ttfb:.2f}s  "
                     f"total={t.total:.2f}s  first_audio={t.first_audio:.2f}s")
 
         await ws.send_json({
@@ -156,10 +174,7 @@ class W2FullStreaming(BasePipeline):
 
         return PipelineResult(asr_text=asr_text, answer_text=full_answer, timings=t)
 
-    # ── 并行预热 ──────────────────────────────────────────
-
     async def _warmup_llm(self):
-        """ASR 进行时预建 LLM API 连接，减少 DNS/TCP/TLS 延迟。"""
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
                 await client.head(self.llm.base_url, timeout=2.0)

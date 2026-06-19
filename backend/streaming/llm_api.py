@@ -4,6 +4,7 @@ Streaming LLM using DeepSeek API (OpenAI-compatible).
 
 import json
 import re
+import asyncio
 import logging
 import httpx
 
@@ -15,6 +16,12 @@ _MD_PATTERNS = [
     (re.compile(r'~~(.+?)~~'), r'\1'),
     (re.compile(r'`(.+?)`'), r'\1'),
 ]
+
+_CLASSIFY_PROMPT = """判断用户输入是否安全。仅回复 JSON: {"safe": true或false, "reason": "sensitive或out_of_domain或ok"}
+
+安全红线（须拒绝）: 拆除安全设备、绕过安全规范、关闭报警器、屏蔽传感器、禁用安全系统、伪造证书、非法改装、破坏设备、恶意代码、入侵系统
+无关话题（须拒绝）: 天气、股票、电影、美食、体育、音乐、政治人物、游戏攻略、娱乐新闻
+正常提问: 焊接、涂装、切割、装配、主机、船体、管系、电气、舾装、质检"""
 
 
 def _strip_markdown(text: str) -> str:
@@ -52,30 +59,42 @@ class StreamingLLM:
             "temperature": 0.7,
         }
 
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            async with client.stream("POST", f"{self.base_url}/v1/chat/completions",
-                                     headers=headers, json=payload) as resp:
-                buffer = ""
-                async for line in resp.aiter_lines():
-                    if not line.startswith("data: "):
-                        continue
-                    data_str = line[6:].strip()
-                    if data_str == "[DONE]":
-                        break
-                    try:
-                        data = json.loads(data_str)
-                        delta = data["choices"][0].get("delta", {})
-                        token = delta.get("content", "")
-                        if token:
-                            buffer += token
-                            logger.debug(f"[LLM] token: {token!r}")
-                            yield ("token", token)
-                    except (json.JSONDecodeError, KeyError):
-                        continue
+        last_error = None
+        for attempt in range(3):
+            try:
+                async with httpx.AsyncClient(timeout=60.0) as client:
+                    async with client.stream("POST", f"{self.base_url}/v1/chat/completions",
+                                             headers=headers, json=payload) as resp:
+                        buffer = ""
+                        async for line in resp.aiter_lines():
+                            if not line.startswith("data: "):
+                                continue
+                            data_str = line[6:].strip()
+                            if data_str == "[DONE]":
+                                break
+                            try:
+                                data = json.loads(data_str)
+                                delta = data["choices"][0].get("delta", {})
+                                token = delta.get("content", "")
+                                if token:
+                                    buffer += token
+                                    logger.debug(f"[LLM] token: {token!r}")
+                                    yield ("token", token)
+                            except (json.JSONDecodeError, KeyError):
+                                continue
 
-                if buffer.strip():
-                    logger.info(f"[LLM] stream done, buffer={buffer!r}")
-                    yield ("final", buffer.strip())
+                        if buffer.strip():
+                            logger.info(f"[LLM] stream done, buffer={buffer!r}")
+                            yield ("final", buffer.strip())
+                return
+            except (httpx.RemoteProtocolError, httpx.ReadError, httpx.ConnectError,
+                    httpx.ReadTimeout, httpx.ConnectTimeout) as e:
+                last_error = e
+                wait = 2 ** attempt
+                logger.warning(f"[LLM] attempt {attempt + 1}/3 failed: {e!r}, retry in {wait}s")
+                await asyncio.sleep(wait)
+
+        raise last_error
 
     async def generate_once(self, prompt: str) -> str:
         """Non-streaming: return full response text."""
@@ -99,3 +118,31 @@ class StreamingLLM:
                                      headers=headers, json=payload)
             data = resp.json()
             return _strip_markdown(data["choices"][0]["message"]["content"].strip())
+
+    async def classify_safety(self, text: str) -> dict:
+        """LLM 安全门控：用最小 token 分类用户输入是否安全。"""
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": _CLASSIFY_PROMPT},
+                {"role": "user", "content": text},
+            ],
+            "max_tokens": 64,
+            "temperature": 0,
+        }
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(f"{self.base_url}/v1/chat/completions",
+                                         headers=headers, json=payload)
+                data = resp.json()
+                content = data["choices"][0]["message"]["content"].strip()
+                logger.info(f"[LLM] classify_safety input={text!r} output={content!r}")
+                result = json.loads(content)
+                return result
+        except Exception as e:
+            logger.warning(f"[LLM] classify_safety failed: {e!r}, defaulting to safe")
+            return {"safe": True, "reason": "ok"}

@@ -42,6 +42,7 @@ header h1{font-size:16px;color:#1a1a1a;font-weight:600}
     <select id="workflowSelect">
       <option value="w1">W1 基线 · 先文字后语音</option>
       <option value="w2">W2 全流式</option>
+      <option value="w3">W3 安全流式</option>
     </select>
     <span class="tag" id="modeTag">非流式</span>
   </div>
@@ -59,7 +60,7 @@ const chat=document.getElementById("chat"),recordBtn=document.getElementById("re
       modeTag=document.getElementById("modeTag");
 let ws=null,audioCtx=null,source=null,processor=null,stream=null;
 let isRecording=false,wsMode="w1",audioQueue=[],audioPlaying=false;
-const descs={w1:"先文字后语音",w2:"全流式"};
+const descs={w1:"先文字后语音",w2:"全流式",w3:"安全流式"};
 
 function connect(m){
   if(ws)ws.close();
