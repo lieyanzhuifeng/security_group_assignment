@@ -73,11 +73,13 @@ class W2FullStreaming(BasePipeline):
         await warmup_task  # 确保预热完成
 
         sentence_queue = asyncio.Queue()
+        output_queue = asyncio.Queue()
+        seq_counter = 0
         first_audio_recorded = False
         filler_done = False
 
-        async def _tts_worker():
-            nonlocal first_audio_recorded, filler_done
+        async def _tts_synthesizer():
+            nonlocal seq_counter
             while True:
                 sent = await sentence_queue.get()
                 if sent is None:
@@ -87,20 +89,53 @@ class W2FullStreaming(BasePipeline):
                 if not sent.strip():
                     sentence_queue.task_done()
                     continue
+                seq = seq_counter
+                seq_counter += 1
                 try:
                     audio_chunk = await self.tts.synthesize_once(sent)
-                    if filler_done and not first_audio_recorded:
-                        t.first_audio = time.perf_counter() - t_start
-                        first_audio_recorded = True
-                    else:
-                        filler_done = True
                     audio_b64 = base64.b64encode(audio_chunk).decode()
-                    await ws.send_json({"type": "tts_chunk", "data": audio_b64, "text": sent})
+                    await output_queue.put((seq, audio_b64, sent))
+                except RuntimeError as e:
+                    if "close" in str(e).lower():
+                        logger.warning(f"[W2] ws closed, synthesizer stopping")
+                        sentence_queue.task_done()
+                        break
+                    logger.error(f"[W2] TTS error for sentence {sent!r}: {e!r}")
+                    await output_queue.put((seq, None, sent))
                 except Exception as e:
                     logger.error(f"[W2] TTS error for sentence {sent!r}: {e!r}")
+                    await output_queue.put((seq, None, sent))
                 sentence_queue.task_done()
 
-        tts_worker_task = asyncio.create_task(_tts_worker())
+        async def _output_sender():
+            nonlocal first_audio_recorded, filler_done
+            buffer = {}
+            next_seq = 0
+            while True:
+                seq, audio_b64, sent = await output_queue.get()
+                if seq is None:
+                    break
+                buffer[seq] = (audio_b64, sent)
+                while next_seq in buffer:
+                    audio_b64, sent = buffer.pop(next_seq)
+                    if audio_b64 is not None:
+                        if filler_done and not first_audio_recorded:
+                            t.first_audio = time.perf_counter() - t_start
+                            first_audio_recorded = True
+                        else:
+                            filler_done = True
+                        try:
+                            await ws.send_json({"type": "tts_chunk", "data": audio_b64, "text": sent})
+                        except RuntimeError as e:
+                            if "close" in str(e).lower():
+                                logger.warning(f"[W2] ws closed, output sender stopping")
+                                return
+                            logger.error(f"[W2] send error: {e!r}")
+                    next_seq += 1
+
+        TTS_WORKERS = 3
+        synthesizer_tasks = [asyncio.create_task(_tts_synthesizer()) for _ in range(TTS_WORKERS)]
+        sender_task = asyncio.create_task(_output_sender())
 
         await sentence_queue.put("好的，正在为您查询。")
 
@@ -139,8 +174,11 @@ class W2FullStreaming(BasePipeline):
             sentence_count += 1
             await sentence_queue.put(sent)
 
-        await sentence_queue.put(None)
-        await tts_worker_task
+        for _ in range(TTS_WORKERS):
+            await sentence_queue.put(None)
+        await asyncio.gather(*synthesizer_tasks)
+        await output_queue.put((None, None, None))
+        await sender_task
 
         t.llm = time.perf_counter() - t_llm_start
         t.total = time.perf_counter() - t_start

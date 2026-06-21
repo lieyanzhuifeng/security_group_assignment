@@ -37,9 +37,14 @@ class StreamingTTS:
             if result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
                 data = result.audio_data or pull_stream.read(pull_stream.size())
                 return data
+            detail = getattr(result, 'error_details', None)
+            if detail is None and result.reason == speechsdk.ResultReason.Canceled:
+                cancel = getattr(result, 'cancellation_details', None)
+                if cancel:
+                    detail = getattr(cancel, 'error_details', str(cancel))
             logger.error(
                 f"TTS synthesis failed: reason={result.reason} "
-                f"details={result.error_details}"
+                f"details={detail}"
             )
             return b""
 

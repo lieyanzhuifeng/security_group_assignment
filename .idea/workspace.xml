@@ -6,6 +6,9 @@
   <component name="ChangeListManager">
     <list default="true" id="24c99518-7c31-4fc3-8b25-6d95b1e9efad" name="更改" comment="">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/backend/pipelines/w2_full_stream.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/pipelines/w2_full_stream.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/backend/pipelines/w3_secure_stream.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/pipelines/w3_secure_stream.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/backend/streaming/tts_azure.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/streaming/tts_azure.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/frontend/index.html" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/index.html" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
