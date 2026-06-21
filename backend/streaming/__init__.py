@@ -1,5 +1,5 @@
-from .asr_azure import StreamingASR
-from .llm_api import StreamingLLM
-from .tts_azure import StreamingTTS
+"""Streaming adapters.
 
-__all__ = ["StreamingASR", "StreamingLLM", "StreamingTTS"]
+Import concrete adapters from their modules to avoid pulling optional online
+speech SDKs into text-only experiments.
+"""

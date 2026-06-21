@@ -120,8 +120,13 @@ class W3SecureStreaming(BasePipeline):
 
             t.total = time.perf_counter() - t_start
             logger.info(f"[W3-block] total={t.total:.2f}s  first_audio={t.first_audio or 0:.2f}s")
-            await ws.send_json({"type": "done"})
-            return PipelineResult(asr_text=asr_text, answer_text=response, timings=t)
+            await ws.send_json({"type": "done", "safe": False, "reason": reason})
+            return PipelineResult(
+                asr_text=asr_text,
+                answer_text=response,
+                timings=t,
+                metrics={"safe": False, "intercept_reason": reason, "safety_source": safety.get("source")},
+            )
 
         # ── 流式 LLM → 句级切分 → 流式 TTS ──────────────
         splitter = SentenceSplitter()
@@ -164,7 +169,7 @@ class W3SecureStreaming(BasePipeline):
         t.total = time.perf_counter() - t_start
 
         logger.info(f"[W3] asr={t.asr:.2f}s  llm_ttfb={t.llm_ttfb:.2f}s  "
-                    f"total={t.total:.2f}s  first_audio={t.first_audio:.2f}s")
+                    f"total={t.total:.2f}s  first_audio={t.first_audio or 0:.2f}s")
 
         await ws.send_json({
             "type": "done",
@@ -172,7 +177,12 @@ class W3SecureStreaming(BasePipeline):
                         "total": round(t.total, 2)}
         })
 
-        return PipelineResult(asr_text=asr_text, answer_text=full_answer, timings=t)
+        return PipelineResult(
+            asr_text=asr_text,
+            answer_text=full_answer,
+            timings=t,
+            metrics={"safe": True, "intercept_reason": "ok", "safety_source": safety.get("source")},
+        )
 
     async def _warmup_llm(self):
         try:

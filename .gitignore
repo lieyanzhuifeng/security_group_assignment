@@ -12,7 +12,9 @@ venv/
 env/
 
 # 数据文件
-data/
+data/*
+!data/
+!data/shipbuilding_dialogues.json
 
 # 模型权重
 model/
